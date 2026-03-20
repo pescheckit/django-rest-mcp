@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "django-rest-mcp"
+version = "0.1.0"
+description = "MCP server for Django REST Framework — auto-discovers DRF views and exposes them as MCP tools"
+requires-python = ">=3.12"
+dependencies = [
+    "django>=5.1",
+    "djangorestframework>=3.14",
+    "mcp>=1.26",
+    "pydantic>=2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-django",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/drf_mcp"]

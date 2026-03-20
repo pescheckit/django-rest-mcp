@@ -14,7 +14,7 @@ dependencies = [
     "pydantic>=2",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest",
     "pytest-django",

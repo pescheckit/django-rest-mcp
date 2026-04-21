@@ -1,10 +1,12 @@
 """Convert DRF serializer fields to Pydantic models for MCP tool schemas."""
 
 import logging
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 from pydantic import BaseModel, create_model
 from rest_framework import serializers
+from rest_framework.relations import ManyRelatedField
+from rest_framework.serializers import ListSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +75,26 @@ def serializer_to_model(serializer_class, action="create"):
 
 def _get_python_type(field):
     """Map a DRF field instance to a Python type."""
+    # many=True on a related field wraps it in ManyRelatedField -> List[int]
+    if isinstance(field, ManyRelatedField):
+        return List[int]
+
+    # many=True on a nested serializer wraps it in ListSerializer -> List[<child model>]
+    if isinstance(field, ListSerializer):
+        child_model = serializer_to_model(type(field.child))
+        return List[child_model]
+
     for field_class, python_type in FIELD_TYPE_MAP.items():
         if isinstance(field, field_class):
             if field.allow_null:
                 return Optional[python_type]
             return python_type
 
-    # Nested serializer → dict
+    # Nested serializer -> recursively build a Pydantic model
     if isinstance(field, serializers.Serializer):
-        return dict
+        return serializer_to_model(type(field))
 
-    # SerializerMethodField → read-only, but just in case
+    # SerializerMethodField -> read-only, but just in case
     if isinstance(field, serializers.SerializerMethodField):
         return Any
 

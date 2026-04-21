@@ -109,7 +109,8 @@ def _get_default(field):
         return ...
 
     if field.default is not serializers.empty:
-        return field.default
+        # DRF uses callables (e.g. `list`, `dict`) as factory defaults; evaluate them.
+        return field.default() if callable(field.default) else field.default
 
     # Not required but no explicit default
     return ...

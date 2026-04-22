@@ -1,7 +1,6 @@
 """Tests for drf_mcp.server — DRFMCP, register_view, autodiscover."""
 
 import unittest
-from unittest.mock import Mock
 
 from rest_framework import serializers
 from rest_framework.mixins import (

@@ -71,7 +71,9 @@ class TestSerializerToModel(unittest.TestCase):
         model = serializer_to_model(S)
         self.assertEqual(model.model_fields["custom"].annotation, str)
 
-    def test_nested_serializer_becomes_dict(self):
+    def test_nested_serializer_becomes_typed_model(self):
+        from pydantic import BaseModel
+
         class Inner(serializers.Serializer):
             x = serializers.CharField()
 
@@ -79,7 +81,10 @@ class TestSerializerToModel(unittest.TestCase):
             nested = Inner()
 
         model = serializer_to_model(S)
-        self.assertEqual(model.model_fields["nested"].annotation, dict)
+        annotation = model.model_fields["nested"].annotation
+        self.assertTrue(issubclass(annotation, BaseModel))
+        self.assertIn("x", annotation.model_fields)
+        self.assertEqual(annotation.model_fields["x"].annotation, str)
 
     def test_all_readonly_produces_empty_model(self):
         class S(serializers.Serializer):

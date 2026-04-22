@@ -3,7 +3,7 @@
 import logging
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, create_model
+from pydantic import create_model
 from rest_framework import serializers
 from rest_framework.relations import ManyRelatedField
 from rest_framework.serializers import ListSerializer

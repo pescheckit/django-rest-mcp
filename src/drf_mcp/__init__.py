@@ -1,7 +1,10 @@
-from drf_mcp.metadata import AuthorizationServerMetadataView, ProtectedResourceMetadataView
-from drf_mcp.schema import serializer_to_model
-from drf_mcp.server import DRFMCP, get_current_request
-from drf_mcp.views import IsOAuth2Authenticated, MCPView
+"""Public API of drf_mcp.
+
+Top-level imports are deferred via PEP 562 `__getattr__` so that adding
+`drf_mcp` to `INSTALLED_APPS` does not trigger DRF/auth imports before
+the Django app registry has finished loading.
+"""
+from importlib import import_module
 
 __all__ = [
     "AuthorizationServerMetadataView",
@@ -12,3 +15,22 @@ __all__ = [
     "get_current_request",
     "serializer_to_model",
 ]
+
+_EXPORTS = {
+    "AuthorizationServerMetadataView": "drf_mcp.metadata",
+    "ProtectedResourceMetadataView": "drf_mcp.metadata",
+    "serializer_to_model": "drf_mcp.schema",
+    "DRFMCP": "drf_mcp.server",
+    "get_current_request": "drf_mcp.server",
+    "IsOAuth2Authenticated": "drf_mcp.views",
+    "MCPView": "drf_mcp.views",
+}
+
+
+def __getattr__(name):
+    module_name = _EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(module_name), name)
+    globals()[name] = value
+    return value

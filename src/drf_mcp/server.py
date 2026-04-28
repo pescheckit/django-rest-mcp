@@ -96,7 +96,11 @@ class DRFMCP:
         prepare_request = self.prepare_request
 
         def _make_request(fake_request, original_request):
-            force_authenticate(fake_request, user=original_request.user)
+            force_authenticate(
+                fake_request,
+                user=original_request.user,
+                token=original_request.auth,
+            )
             if prepare_request:
                 prepare_request(fake_request, original_request)
 

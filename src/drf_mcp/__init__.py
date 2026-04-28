@@ -10,8 +10,11 @@ __all__ = [
     "AuthorizationServerMetadataView",
     "DRFMCP",
     "IsOAuth2Authenticated",
+    "MCPAuthorizationView",
+    "MCPTokenView",
     "MCPView",
     "ProtectedResourceMetadataView",
+    "StaticClientRegistrationView",
     "get_current_request",
     "serializer_to_model",
 ]
@@ -24,6 +27,9 @@ _EXPORTS = {
     "get_current_request": "drf_mcp.server",
     "IsOAuth2Authenticated": "drf_mcp.views",
     "MCPView": "drf_mcp.views",
+    "MCPAuthorizationView": "drf_mcp.auth_views",
+    "MCPTokenView": "drf_mcp.auth_views",
+    "StaticClientRegistrationView": "drf_mcp.registration",
 }
 
 

@@ -122,6 +122,87 @@ concrete default. Unknown field types fall back to `str` with a debug log.
 The generated pydantic model is named `<Serializer>Input`, for example
 `BookSerializer` becomes `BookInput`.
 
+## Multi-tenant OAuth flow
+
+For deployments where one user belongs to multiple organisations and each
+MCP integration should bind to one of them, the package ships drop-in
+replacements for django-oauth-toolkit's `AuthorizationView` and
+`TokenView`, plus a Dynamic Client Registration endpoint (RFC 7591).
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    ...,
+    "oauth2_provider",
+    "drf_mcp",
+]
+
+DRF_MCP = {
+    "RESOURCE_PATH": "/api/mcp/",
+    "SCOPES": ["read:api", "create:api"],
+
+    # Org picker on the consent page.
+    # Returns an iterable of objects with `.id` and `.name`.
+    "GET_USER_ORGS": "myapp.mcp_hooks.get_user_orgs",
+
+    # Per-org Application reassignment after token exchange.
+    # `request.auth.application.organisation` then resolves to the org the
+    # user picked, instead of staying on the shared "MCP Public Client".
+    "GET_OR_CREATE_PER_ORG_APP": "myapp.mcp_hooks.get_or_create_per_org_app",
+
+    # Hosts allowed to register a redirect_uri via DCR. Loopback HTTP is
+    # always allowed; this list governs HTTPS hosts only.
+    "REGISTRATION_HTTPS_HOST_SUFFIXES": ["claude.ai", "anthropic.com"],
+}
+```
+
+```python
+# urls.py
+from drf_mcp import (
+    DRFMCP, IsOAuth2Authenticated, MCPView,
+    MCPAuthorizationView, MCPTokenView, StaticClientRegistrationView,
+    AuthorizationServerMetadataView, ProtectedResourceMetadataView,
+)
+
+mcp = DRFMCP("myapi"); mcp.autodiscover(router)
+
+class MyMCPView(MCPView):
+    mcp_server = mcp
+    permission_classes = [IsOAuth2Authenticated]
+
+urlpatterns = [
+    path("o/authorize/",  MCPAuthorizationView.as_view(),     name="authorize"),
+    path("o/token/",      MCPTokenView.as_view(),             name="token"),
+    path("mcp/",          MyMCPView.as_view(),                name="mcp"),
+    path("mcp/register/", StaticClientRegistrationView.as_view()),
+    path(".well-known/oauth-authorization-server", AuthorizationServerMetadataView.as_view()),
+    path(".well-known/oauth-protected-resource",   ProtectedResourceMetadataView.as_view()),
+]
+```
+
+Both hooks are optional: omit `GET_USER_ORGS` to render the consent page
+without an org picker; omit `GET_OR_CREATE_PER_ORG_APP` to leave issued
+tokens on the shared Application. The package ships a default
+`templates/oauth2_provider/authorize.html` that includes the picker block;
+project-level templates take precedence, so existing custom consent pages
+continue to win — add an `{% if organisations %}` block to your version
+when you want to surface the picker.
+
+A migration (`drf_mcp.0001_seed_mcp_public_client`) seeds the shared
+`"MCP Public Client"` Application row that DCR appends redirect URIs to.
+It uses `migrations.swappable_dependency` against
+`OAUTH2_PROVIDER["APPLICATION_MODEL"]`, so swapped Application models
+work. The migration declares
+`replaces = [("pescheck_api", "0018_seed_mcp_public_client")]` for the
+benefit of one specific upgrade path; remove that line in your fork if it
+doesn't apply.
+
+Install the OAuth-related dependency with the extra:
+
+```bash
+pip install 'django-rest-mcp[oauth]'
+```
+
 ## Authentication
 
 `IsOAuth2Authenticated` is a thin DRF permission that accepts the request only

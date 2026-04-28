@@ -17,10 +17,14 @@ dependencies = [
     "pydantic>=2",
 ]
 
+[project.optional-dependencies]
+oauth = ["django-oauth-toolkit>=2.4"]
+
 [dependency-groups]
 dev = [
     "pytest",
     "pytest-django",
+    "django-oauth-toolkit>=2.4",
 ]
 
 [tool.hatch.version]

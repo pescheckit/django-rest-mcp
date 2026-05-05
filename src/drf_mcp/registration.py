@@ -1,10 +1,14 @@
-"""Dynamic OAuth 2.0 Client Registration (RFC 7591) for MCP clients.
+"""Per-instance OAuth 2.0 Dynamic Client Registration (RFC 7591) for MCP.
 
-All MCP clients share a single :class:`Application` row whose name is
-``"MCP Public Client"`` (seeded by the package's initial migration). Each
-registration call merges the requested ``redirect_uris`` into that row's
-allow-list so subsequent ``/o/authorize`` calls accept them under
-django-oauth-toolkit's exact-match check.
+Each ``POST /register`` creates a brand-new :class:`Application` row with
+its own ``client_id`` and the redirect_uris from the request. The row
+starts unbound (``user`` and ``organisation`` are NULL); it is bound to a
+specific (user, organisation) on first successful consent
+(:class:`drf_mcp.auth_views.MCPAuthorizationView`).
+
+There is intentionally no shared "MCP Public Client" row — every MCP
+client gets its own Application, so ``request.auth.application`` always
+resolves to a tenant-scoped row once the client has been used.
 
 Configuration via Django settings:
 
@@ -19,14 +23,18 @@ Configuration via Django settings:
     }
 
 The endpoint is intentionally open per RFC 7591. Hosts that want rate
-limiting should subclass :class:`StaticClientRegistrationView` and apply
-their own decorator, or rate-limit at the reverse-proxy layer.
+limiting should subclass :class:`DynamicClientRegistrationView` and apply
+their own decorator, or rate-limit at the reverse-proxy layer. Abandoned
+registrations (created but never bound by a successful authorization)
+should be reaped by a periodic job — see ``cleanup_unbound_mcp_apps`` in
+the documentation for an example management command.
 
 Requires :mod:`oauth2_provider`; install ``django-rest-mcp[oauth]``.
 """
 import ipaddress
 import json
 import logging
+import secrets
 from urllib.parse import urlparse
 
 from django.http import JsonResponse
@@ -37,8 +45,6 @@ from django.views.decorators.csrf import csrf_exempt
 from drf_mcp.views import get_setting
 
 logger = logging.getLogger(__name__)
-
-MCP_APP_NAME = "MCP Public Client"
 
 
 def _is_allowed_redirect_uri(uri, https_host_suffixes):
@@ -63,8 +69,13 @@ def _is_allowed_redirect_uri(uri, https_host_suffixes):
 
 
 @method_decorator(csrf_exempt, name="dispatch")
-class StaticClientRegistrationView(View):
-    """RFC 7591 Dynamic Client Registration against a shared public app."""
+class DynamicClientRegistrationView(View):
+    """RFC 7591 Dynamic Client Registration creating per-instance Applications.
+
+    Each call creates a new public Application row whose ``client_id`` and
+    ``redirect_uris`` are returned to the caller. The row starts unbound
+    (no ``user``, no ``organisation``); first successful consent binds it.
+    """
 
     def post(self, request):
         try:
@@ -99,33 +110,24 @@ class StaticClientRegistrationView(View):
                 status=400,
             )
 
+        client_name = body.get("client_name") or "MCP Client"
+        # Tag the row with a short random suffix so admin listings stay
+        # readable when a client re-registers (each call yields a fresh row).
+        tag = secrets.token_hex(3)
         from oauth2_provider.models import get_application_model
-
         Application = get_application_model()
-        app, created = Application.objects.get_or_create(
-            name=MCP_APP_NAME,
-            defaults={
-                "client_type": "public",
-                "authorization_grant_type": "authorization-code",
-                "client_secret": "",
-                "redirect_uris": "",
-                "skip_authorization": False,
-            },
+        app = Application.objects.create(
+            name=f"{client_name} ({tag})"[:255],
+            client_type="public",
+            authorization_grant_type="authorization-code",
+            client_secret="",
+            redirect_uris=" ".join(sorted(set(safe))),
+            skip_authorization=False,
         )
-        if created:
-            logger.warning(
-                "MCP Public Client auto-created (drf_mcp seed migration did not run)"
-            )
-
-        existing = set(app.redirect_uris.split()) if app.redirect_uris else set()
-        merged = existing | set(safe)
-        if merged != existing:
-            app.redirect_uris = " ".join(sorted(merged))
-            app.save(update_fields=["redirect_uris"])
-            logger.info(
-                "MCP Public Client redirect_uris extended with %s",
-                sorted(set(safe) - existing),
-            )
+        logger.info(
+            "MCP DCR: created Application %s (client_id=%s, redirects=%s)",
+            app.pk, app.client_id, sorted(set(safe)),
+        )
 
         return JsonResponse({
             "client_id": app.client_id,
@@ -135,3 +137,7 @@ class StaticClientRegistrationView(View):
             "response_types": ["code"],
             "redirect_uris": safe,
         }, status=201)
+
+
+# Backwards-compatible alias for hosts that imported the old name.
+StaticClientRegistrationView = DynamicClientRegistrationView

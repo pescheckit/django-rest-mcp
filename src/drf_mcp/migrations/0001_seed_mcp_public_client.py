@@ -24,23 +24,21 @@ def _application_model(apps):
     return apps.get_model(*_resolve_application_model().split(".", 1))
 
 
-def create_mcp_public_client(apps, schema_editor):
-    Application = _application_model(apps)
-    Application.objects.get_or_create(
-        name=MCP_APP_NAME,
-        defaults={
-            "client_type": "public",
-            "authorization_grant_type": "authorization-code",
-            "client_secret": "",
-            "redirect_uris": "",
-            "skip_authorization": False,
-        },
-    )
+def noop(apps, schema_editor):
+    """Historical seed retained for migration name compatibility only.
 
+    Earlier versions of this package created a single shared Application
+    named ``MCP Public Client``. That row is no longer used: registrations
+    now create per-instance Applications via
+    :class:`drf_mcp.registration.DynamicClientRegistrationView`, and the
+    Application is bound to a (user, organisation) at first consent. Fresh
+    environments must not seed the shared row, so the operation is a no-op.
 
-def delete_mcp_public_client(apps, schema_editor):
-    Application = _application_model(apps)
-    Application.objects.filter(name=MCP_APP_NAME).delete()
+    Existing environments where this migration was previously applied
+    already have the row; deleting it is a deployment-time operational
+    decision (per-environment, with stakeholder confirmation) and is
+    therefore not handled by a follow-up data migration.
+    """
 
 
 class Migration(migrations.Migration):
@@ -54,5 +52,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(create_mcp_public_client, delete_mcp_public_client),
+        migrations.RunPython(noop, noop),
     ]

@@ -78,6 +78,14 @@ class DRFMCP:
         http_method, viewset_actions = action_map[action]
         factory = self._factory
 
+        # The URL kwarg DRF's get_object() reads for detail actions. Most
+        # ViewSets use "pk", but some override lookup_field (e.g. "check_type"),
+        # so honour that instead of hardcoding "pk".
+        lookup_kwarg = (
+            getattr(view_class, "lookup_url_kwarg", None)
+            or getattr(view_class, "lookup_field", "pk")
+        )
+
         # For create/update, try to get a Pydantic model from the serializer
         # so the AI knows exactly what fields to send.
         input_model = None
@@ -126,7 +134,7 @@ class DRFMCP:
                 def _invoke():
                     fake_request = getattr(factory, http_method)("/")
                     _make_request(fake_request, request)
-                    return _call_view(fake_request, pk=id)
+                    return _call_view(fake_request, **{lookup_kwarg: id})
                 return await sync_to_async(_invoke)()
 
         elif action == "create":
@@ -154,7 +162,7 @@ class DRFMCP:
                     def _invoke():
                         fake_request = getattr(factory, http_method)("/", data.model_dump(exclude_unset=True), format="json")
                         _make_request(fake_request, request)
-                        return _call_view(fake_request, pk=id)
+                        return _call_view(fake_request, **{lookup_kwarg: id})
                     return await sync_to_async(_invoke)()
             else:
                 async def tool_fn(id: str, data: dict) -> dict:
@@ -162,7 +170,7 @@ class DRFMCP:
                     def _invoke():
                         fake_request = getattr(factory, http_method)("/", data, format="json")
                         _make_request(fake_request, request)
-                        return _call_view(fake_request, pk=id)
+                        return _call_view(fake_request, **{lookup_kwarg: id})
                     return await sync_to_async(_invoke)()
 
         # FastMCP uses the function name + docstring for tool metadata

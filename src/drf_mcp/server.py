@@ -1,17 +1,69 @@
 import contextvars
+import io
 import json
 import logging
 
 from asgiref.sync import async_to_sync, sync_to_async
 from django.core.serializers.json import DjangoJSONEncoder
-from django.http import HttpResponse
+from django.http import HttpRequest, HttpResponse, QueryDict
 from mcp.server.fastmcp import FastMCP
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-from rest_framework.test import APIRequestFactory, force_authenticate
 
 from drf_mcp.schema import serializer_to_model
 
 logger = logging.getLogger(__name__)
+
+
+def _build_inner_request(original_request, method, data=None):
+    """Build a Django request for the inner ViewSet call.
+
+    Uses the transport-neutral ``HttpRequest`` base class (not ``WSGIRequest``),
+    so it is correct whether the app is served over WSGI or ASGI. Host, scheme,
+    and auth header are copied from the genuine, already ALLOWED_HOSTS-validated
+    incoming request, so views that build absolute URLs (DRF pagination links,
+    serializer-built URLs) work in every environment.
+
+    Previously this used rest_framework.test.APIRequestFactory, whose requests
+    hardcode SERVER_NAME='testserver' and so failed ALLOWED_HOSTS validation
+    ("Invalid HTTP_HOST header: 'testserver'") the moment a view called
+    request.get_host().
+    """
+    base = getattr(original_request, "_request", original_request)
+
+    inner = HttpRequest()
+    inner.method = method.upper()
+    inner.META = base.META.copy()
+    inner.path = inner.path_info = "/"
+    inner.GET = QueryDict()
+
+    # Carry the incoming request's auth context so the inner call behaves like
+    # the outer one regardless of how it authenticated -- OAuth token, session,
+    # cookie, or a custom backend. Cookies and session are forwarded (the session
+    # is the *same* object, so any writes are persisted by the outer request's
+    # SessionMiddleware), and the resolved user is set directly.
+    inner.COOKIES = getattr(base, "COOKIES", {})
+    inner.user = original_request.user
+    if hasattr(base, "session"):
+        inner.session = base.session
+
+    if data is None:
+        body = b""
+        inner.META.pop("CONTENT_TYPE", None)
+    else:
+        body = json.dumps(data, cls=DjangoJSONEncoder).encode("utf-8")
+        inner.META["CONTENT_TYPE"] = "application/json"
+    inner.META["CONTENT_LENGTH"] = str(len(body))
+    inner._body = body
+    inner._stream = io.BytesIO(body)
+    inner._read_started = False
+
+    # Reuse the already-resolved authentication instead of re-running it. DRF's
+    # Request wrapper turns these two attributes into a ForcedAuthentication;
+    # this is exactly what rest_framework.test.force_authenticate sets, inlined
+    # here to keep the test framework out of the runtime path.
+    inner._force_auth_user = original_request.user
+    inner._force_auth_token = original_request.auth
+    return inner
 
 # Stores the authenticated Django request for the current MCP invocation.
 # Tool functions read this to get request.user / request.auth.
@@ -39,7 +91,6 @@ class DRFMCP:
         self.name = name
         self.prepare_request = prepare_request
         self._fastmcp = FastMCP(name=name)
-        self._factory = APIRequestFactory()
 
     def register_view(self, view_class, *, action, name=None, description=None):
         """
@@ -76,7 +127,6 @@ class DRFMCP:
             raise ValueError(f"Unknown action: {action}. Must be one of {list(action_map)}")
 
         http_method, viewset_actions = action_map[action]
-        factory = self._factory
 
         # The URL kwarg DRF's get_object() reads for detail actions. Most
         # ViewSets use "pk", but some override lookup_field (e.g. "check_type"),
@@ -103,17 +153,19 @@ class DRFMCP:
         # so we create different functions depending on what params the action needs.
         prepare_request = self.prepare_request
 
-        def _make_request(fake_request, original_request):
-            force_authenticate(
-                fake_request,
-                user=original_request.user,
-                token=original_request.auth,
-            )
+        def _make_request(original_request, data=None):
+            fake_request = _build_inner_request(original_request, http_method, data)
             if prepare_request:
                 prepare_request(fake_request, original_request)
+            return fake_request
 
         def _call_view(fake_request, **kwargs):
-            view = view_class.as_view(viewset_actions, permission_classes=[])
+            # Honour the ViewSet's own permission_classes (OAuth scopes,
+            # active-org checks, object-level perms). The inner request carries
+            # the genuine request.auth/user, so they evaluate exactly as they do
+            # over HTTP. Do NOT pass permission_classes=[] here: that silently
+            # disables scope enforcement and lets a read-only token drive writes.
+            view = view_class.as_view(viewset_actions)
             resp = view(fake_request, **kwargs)
             if hasattr(resp, "render"):
                 resp.render()
@@ -123,18 +175,14 @@ class DRFMCP:
             async def tool_fn() -> dict:
                 request = _django_request_ctx.get()
                 def _invoke():
-                    fake_request = factory.get("/")
-                    _make_request(fake_request, request)
-                    return _call_view(fake_request)
+                    return _call_view(_make_request(request))
                 return await sync_to_async(_invoke)()
 
         elif action in ("retrieve", "destroy"):
             async def tool_fn(id: str) -> dict:
                 request = _django_request_ctx.get()
                 def _invoke():
-                    fake_request = getattr(factory, http_method)("/")
-                    _make_request(fake_request, request)
-                    return _call_view(fake_request, **{lookup_kwarg: id})
+                    return _call_view(_make_request(request), **{lookup_kwarg: id})
                 return await sync_to_async(_invoke)()
 
         elif action == "create":
@@ -142,17 +190,13 @@ class DRFMCP:
                 async def tool_fn(data: input_model) -> dict:
                     request = _django_request_ctx.get()
                     def _invoke():
-                        fake_request = factory.post("/", data.model_dump(exclude_unset=True), format="json")
-                        _make_request(fake_request, request)
-                        return _call_view(fake_request)
+                        return _call_view(_make_request(request, data.model_dump(exclude_unset=True)))
                     return await sync_to_async(_invoke)()
             else:
                 async def tool_fn(data: dict) -> dict:
                     request = _django_request_ctx.get()
                     def _invoke():
-                        fake_request = factory.post("/", data, format="json")
-                        _make_request(fake_request, request)
-                        return _call_view(fake_request)
+                        return _call_view(_make_request(request, data))
                     return await sync_to_async(_invoke)()
 
         elif action in ("update", "partial_update"):
@@ -160,17 +204,13 @@ class DRFMCP:
                 async def tool_fn(id: str, data: input_model) -> dict:
                     request = _django_request_ctx.get()
                     def _invoke():
-                        fake_request = getattr(factory, http_method)("/", data.model_dump(exclude_unset=True), format="json")
-                        _make_request(fake_request, request)
-                        return _call_view(fake_request, **{lookup_kwarg: id})
+                        return _call_view(_make_request(request, data.model_dump(exclude_unset=True)), **{lookup_kwarg: id})
                     return await sync_to_async(_invoke)()
             else:
                 async def tool_fn(id: str, data: dict) -> dict:
                     request = _django_request_ctx.get()
                     def _invoke():
-                        fake_request = getattr(factory, http_method)("/", data, format="json")
-                        _make_request(fake_request, request)
-                        return _call_view(fake_request, **{lookup_kwarg: id})
+                        return _call_view(_make_request(request, data), **{lookup_kwarg: id})
                     return await sync_to_async(_invoke)()
 
         # FastMCP uses the function name + docstring for tool metadata

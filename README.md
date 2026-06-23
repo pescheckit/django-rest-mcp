@@ -82,7 +82,8 @@ from drf_mcp import (
     AuthorizationServerMetadataView, ProtectedResourceMetadataView,
 )
 
-mcp = DRFMCP("myapp"); mcp.autodiscover(router)
+mcp = DRFMCP("myapp")
+mcp.autodiscover(router)
 
 urlpatterns = [
     path("mcp/", mcp.as_view(permission_classes=[IsOAuth2Authenticated]), name="mcp"),
@@ -200,7 +201,8 @@ from drf_mcp import (
     AuthorizationServerMetadataView, ProtectedResourceMetadataView,
 )
 
-mcp = DRFMCP("myapi"); mcp.autodiscover(router)
+mcp = DRFMCP("myapi")
+mcp.autodiscover(router)
 
 class MyMCPView(MCPView):
     mcp_server = mcp

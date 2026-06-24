@@ -144,7 +144,7 @@ class DRFMCP:
             if serializer_class:
                 try:
                     input_model = serializer_to_model(serializer_class, action=action)
-                    logger.info("Generated schema for %s from %s", tool_name, serializer_class.__name__)
+                    logger.debug("Generated schema for %s from %s", tool_name, serializer_class.__name__)
                 except (AttributeError, TypeError, KeyError) as e:
                     logger.warning("Could not generate schema for %s: %s", tool_name, e)
 
@@ -218,7 +218,7 @@ class DRFMCP:
         tool_fn.__doc__ = tool_description
         self._fastmcp.add_tool(tool_fn, name=tool_name, description=tool_description)
 
-        logger.info("Registered MCP tool: %s → %s.%s", tool_name, view_class.__name__, action)
+        logger.debug("Registered MCP tool: %s → %s.%s", tool_name, view_class.__name__, action)
 
     # Standard DRF actions and which mixin provides them
     _STANDARD_ACTIONS = {

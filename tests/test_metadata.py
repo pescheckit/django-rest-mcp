@@ -23,8 +23,43 @@ class TestProtectedResourceMetadata(unittest.TestCase):
         data = json.loads(response.content)
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(data["resource"], "https://example.com/api/mcp/")
+        # No trailing slash: the MCP spec asks for that form for
+        # interoperability, even though RESOURCE_PATH carries one.
+        self.assertEqual(data["resource"], "https://example.com/api/mcp")
         self.assertEqual(data["authorization_servers"], ["https://example.com"])
+
+    def test_advertises_supported_scopes(self):
+        request = self.factory.get("/.well-known/oauth-protected-resource")
+        response = ProtectedResourceMetadataView.as_view()(request)
+        data = json.loads(response.content)
+
+        self.assertEqual(data["scopes_supported"], ["read", "write"])
+
+    def test_path_aware_url_echoes_requested_path(self):
+        """RFC 9728 s3.3: ``resource`` must equal the identifier the client used.
+
+        A client configured with the trailing-slash spelling inserts the
+        well-known suffix into that spelling, so the document served there has
+        to echo it back or the client rejects the document.
+        """
+        for requested, expected in [
+            ("api/mcp", "https://example.com/api/mcp"),
+            ("api/mcp/", "https://example.com/api/mcp/"),
+        ]:
+            with self.subTest(requested=requested):
+                request = self.factory.get(
+                    f"/.well-known/oauth-protected-resource/{requested}"
+                )
+                response = ProtectedResourceMetadataView.as_view()(
+                    request, resource_path=requested
+                )
+                data = json.loads(response.content)
+
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(data["resource"], expected)
+                self.assertEqual(
+                    data["authorization_servers"], ["https://example.com"]
+                )
 
     def test_content_type_is_json(self):
         request = self.factory.get("/.well-known/oauth-protected-resource")

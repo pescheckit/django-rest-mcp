@@ -19,36 +19,43 @@ Individual URLs can still be overridden via DRF_MCP in Django settings:
 from django.http import JsonResponse
 from django.views import View
 
-from drf_mcp.views import get_setting
+from drf_mcp.views import base_url, canonical_resource, get_setting
 
 
 def _base_url(request):
-    """Return the base URL the metadata should advertise.
-
-    Prefers an explicit DRF_MCP["RESOURCE_URL"] setting when present so a
-    deployment can pin its canonical hostname. Otherwise derives scheme +
-    host from the request, matching whatever URL the client used to reach
-    the metadata endpoint.
-    """
-    override = get_setting("RESOURCE_URL")
-    if override:
-        return override.rstrip("/")
-    return f"{request.scheme}://{request.get_host()}"
+    """Backwards-compatible alias for :func:`drf_mcp.views.base_url`."""
+    return base_url(request)
 
 
 class ProtectedResourceMetadataView(View):
     """OAuth 2.0 Protected Resource Metadata (RFC 9728).
 
-    Serves /.well-known/oauth-protected-resource
-    Tells MCP clients where to find the authorization server.
+    Serves both
+
+    * /.well-known/oauth-protected-resource/<resource_path> - the path-aware
+      URL required by RFC 9728 s3.1 whenever the resource identifier has a
+      path component, and
+    * /.well-known/oauth-protected-resource - the bare well-known root, kept
+      for clients that only probe there.
+
+    RFC 9728 s3.3 requires the ``resource`` value to be identical to the
+    identifier into which the well-known suffix was inserted, and clients
+    reject the document outright when it is not. So the path-aware route
+    echoes back exactly the path it was asked for rather than a configured
+    constant: that keeps both ``/api/mcp`` and ``/api/mcp/`` valid for
+    whichever spelling a client was configured with.
     """
 
-    def get(self, request):
+    def get(self, request, resource_path=None):
         base = _base_url(request)
-        resource_path = get_setting("RESOURCE_PATH", "/api/mcp/")
+        if resource_path is None:
+            resource = canonical_resource(request)
+        else:
+            resource = f"{base}/{resource_path}"
         return JsonResponse({
-            "resource": f"{base}{resource_path}",
+            "resource": resource,
             "authorization_servers": [base],
+            "scopes_supported": get_setting("SCOPES", []),
         })
 
 

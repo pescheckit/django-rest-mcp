@@ -133,7 +133,11 @@ class DynamicClientRegistrationView(View):
             "client_id": app.client_id,
             "client_name": app.name,
             "token_endpoint_auth_method": "none",
-            "grant_types": ["authorization_code"],
+            # django-oauth-toolkit issues refresh tokens for the
+            # authorization-code grant, so advertise them: a client that is
+            # told the grant is unsupported stops refreshing and forces the
+            # user through the whole browser flow again on every expiry.
+            "grant_types": ["authorization_code", "refresh_token"],
             "response_types": ["code"],
             "redirect_uris": safe,
         }, status=201)
